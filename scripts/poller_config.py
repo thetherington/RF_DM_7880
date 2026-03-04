@@ -37,7 +37,7 @@ class Plugin(InsitePlugin):
             for _, instance in card.items():
                 document = {
                     "fields": instance,
-                    "host": params["ip"],
+                    "host": host,
                     "name": "rf_demod",
                 }
 
