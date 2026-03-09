@@ -1,11 +1,18 @@
 # inSITE 7880DM4-ATSC RF Demodulator Collector
 
-Collector for the 7880DM4-ATSC Demodulator RF input power level collector. Poller script has integration with VistaLINK PRO (Magnum NMS) to annotate card and frame custom descriptions. This script is capable of collecting the demodulator input RF power level for all cards in a single 7800 Frame.
+Collector for the 7880DM4-ATSC Demodulator RF input power level collector. Poller script has integration with VistaLINK PRO (Magnum NMS) to annotate card and frame custom descriptions. This script is capable of collecting the demodulator input RF power level for all cards in single or multiple 7800 Frames.
+
+## Features:
+
+- **Single Frame Collection**: Collect data from a single 7800 frame
+- **Multi-Frame Collection**: Collect data from multiple 7800 frames concurrently using threading for improved performance
+- **Auto-Discovery**: Automatically discovers 7880DM4-ATSC cards in configured frames
+- **NMS Integration**: Optional integration with VistaLINK/Magnum NMS for custom card/frame labels
 
 ## Minimum Requirements:
 
--   inSITE Version 12 and service pack 5
--   Ubuntu 22.04
+- inSITE Version 12 and service pack 5
+- Ubuntu 22.04
 
 ## Installation:
 
@@ -47,14 +54,36 @@ To configure a poller to use the module start a new python poller configuration 
 
 ## Usage:
 
-```
+The collector supports two modes: `single` for collecting from one frame, and `multiple` for collecting from multiple frames concurrently.
+
+### General Help:
+
+```bash
 python-insite dm_atsc_collector.py -h
 ```
 
 ```
-usage: dm_atsc_collector.py [-h] -ip <192.168.1.2> [-u <root>] [-p <evertz>] [-nms <ip>]
+usage: dm_atsc_collector.py [-h] {single,multiple} ...
 
 7880DM4-ATSC Input RF Power Level Collector
+
+positional arguments:
+  {single,multiple}
+    single              Collect from a single 7800 frame
+    multiple            Collect from multiple 7800 frames
+
+options:
+  -h, --help            show this help message and exit
+```
+
+### Single Frame Mode:
+
+```bash
+python-insite dm_atsc_collector.py single -h
+```
+
+```
+usage: dm_atsc_collector.py single [-h] -ip <192.168.1.2> [-u <root>] [-p <evertz>] [-nms <ip>] [-legacy]
 
 options:
   -h, --help            show this help message and exit
@@ -66,14 +95,57 @@ options:
                         Password for frame web access
   -nms <ip>, --magnum-nms <ip>
                         IP Address of the NMS Server for custom names (optional)
+  -legacy, --legacy-frame
+                        Use the legacy frame URL structure (optional)
+```
+
+### Multiple Frame Mode:
+
+```bash
+python-insite dm_atsc_collector.py multiple -h
+```
+
+```
+usage: dm_atsc_collector.py multiple [-h] -ips <192.168.1.2> [<192.168.1.2> ...] [-u <root>] [-p <evertz>] [-nms <ip>] [-legacy]
+
+options:
+  -h, --help            show this help message and exit
+  -ips <192.168.1.2> [<192.168.1.2> ...], --frame-ips <192.168.1.2> [<192.168.1.2> ...]
+                        IP Addresses of 7800 Frames
+  -u <root>, --username <root>
+                        Username for frame web access
+  -p <evertz>, --password <evertz>
+                        Password for frame web access
+  -nms <ip>, --magnum-nms <ip>
+                        IP Address of the NMS Server for custom names (optional)
+  -legacy, --legacy-frame
+                        Use the legacy frame URL structure (optional)
 ```
 
 ## Testing:
 
-The process_monitor script can be ran manually from the shell using the following command
+The collector script can be run manually from the shell using the following commands:
 
+### Single Frame Collection:
+
+```bash
+python-insite dm_atsc_collector.py single -ip 192.168.1.100 -nms 192.168.1.10
 ```
-python-insite dm_atsc_collector.py -ip <fc-ip> -nms <nms-ip>
+
+### Multiple Frame Collection:
+
+Collect from multiple frames concurrently (uses threading for improved performance):
+
+```bash
+python-insite dm_atsc_collector.py multiple -ips 192.168.1.100 192.168.1.101 192.168.1.102 -nms 192.168.1.10
+```
+
+### Legacy Frame Support:
+
+For older firmware on frame controllers, use the `-legacy` flag:
+
+```bash
+python-insite dm_atsc_collector.py single -ip 192.168.1.100 -nms 192.168.1.10 -legacy
 ```
 
 Below is the sample json file created:

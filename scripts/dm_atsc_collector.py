@@ -3,7 +3,9 @@
 import argparse
 import copy
 import json
+import os
 import re
+import threading
 from typing import (
     Any,
     Dict,
@@ -20,7 +22,7 @@ from typing import (
 import requests
 from requests.exceptions import RequestException
 
-TIMEOUT = 10.0
+TIMEOUT = 5.0
 
 
 class NMSDeviceNamesParams(TypedDict):
@@ -39,6 +41,7 @@ class DMCollectorParams(TypedDict):
     password: NotRequired[str]
     nms: NotRequired[NMSDeviceNamesParams]
     legacy: NotRequired[bool]
+    dump_data: NotRequired[bool]
 
 
 class JSONRPCRequest(TypedDict):
@@ -232,6 +235,9 @@ class DMCollector:
     }
 
     def __init__(self, **kwargs: Unpack[DMCollectorParams]) -> None:
+        # Flag to control whether to dump collected data to a file, can be set via kwargs
+        self.dump_data = False
+
         # Frame information
         self.ip = "localhost"
         self.slots: List[int] = []
@@ -291,6 +297,8 @@ class DMCollector:
 
             for param in response["result"]["parameters"]:
                 try:
+                    # extract the slot number from the parameter id,
+                    # which is in the format "36.<slot>@s"
                     slot = int(param["id"].split(".")[1].split("@")[0])
                     product_name = param.get("value", "")
                     if card in str(product_name):
@@ -329,6 +337,14 @@ class DMCollector:
                     verify=False,
                     timeout=TIMEOUT,
                 )
+
+                if self.dump_data:
+                    if not os.path.exists("dump"):
+                        os.makedirs("dump")
+                    filename = f"dump/{url.replace('/', '_').replace('http:__', '')}"
+                    with open(filename, "w", encoding="utf-8") as f:
+                        json.dump(response.json(), f, indent=4)
+                    print(f"Dumped data to {filename}")
 
                 return json.loads(response.text)
 
@@ -444,23 +460,62 @@ class DMCollector:
         return frame
 
 
-def main():
-    """Main function."""
+class DMCollectorMultiFrame:
+    """Collector for multiple frames, useful for larger deployments."""
 
-    # Argument Parser
-    args_parser = argparse.ArgumentParser(
-        description="7880DM4-ATSC Input RF Power Level Collector"
-    )
+    def __init__(
+        self, frame_ips: List[str], **kwargs: Unpack[DMCollectorParams]
+    ) -> None:
+        self.frame_ips = frame_ips
+        self.collectors: List[DMCollector] = []
 
-    args_parser.add_argument(
-        "-ip",
-        "--frame-ip",
-        required=True,
-        type=str,
-        metavar="<192.168.1.2>",
-        help="IP Address of the 7800 Frame",
-    )
-    args_parser.add_argument(
+        for ip in frame_ips:
+            params = copy.deepcopy(kwargs)
+            params["ip"] = ip
+            collector = DMCollector.auto_discover("7880DM4-ATSC", **params)
+            self.collectors.append(collector)
+
+    def run(self) -> Dict[str, Frame]:
+        """Run collectors for all frames and return a dict of results keyed by frame IP."""
+
+        # results dictionary to store the collected data from each frame, keyed by frame IP
+        results: Dict[str, Frame] = {}
+
+        # A lock to synchronize access to the results dictionary across threads
+        lock = threading.Lock()
+
+        def collect_frame(collector: DMCollector) -> None:
+            """Collect data from a single frame in a thread."""
+            try:
+                # Collect data from the frame
+                # Safely update the results dictionary with the collected data
+                frame_data = collector.run()
+                with lock:
+                    results[collector.ip] = frame_data
+
+            except Exception as error:  # pylint: disable=W0718:broad-exception-caught
+                print(f"Error collecting data from frame {collector.ip}: {error}")
+
+        # Create and start a thread for each collector
+        threads: List[threading.Thread] = []
+
+        for collector in self.collectors:
+            threads.append(threading.Thread(target=collect_frame, args=(collector,)))
+
+        # Start all threads
+        for thread in threads:
+            thread.start()
+
+        # Wait for all threads to complete
+        for thread in threads:
+            thread.join()
+
+        return results
+
+
+def add_common_args(parser: argparse.ArgumentParser) -> None:
+    """Add common authentication and optional flags to subcommands."""
+    parser.add_argument(
         "-u",
         "--username",
         required=False,
@@ -469,7 +524,7 @@ def main():
         default="root",
         help="Username for frame web access",
     )
-    args_parser.add_argument(
+    parser.add_argument(
         "-p",
         "--password",
         required=False,
@@ -478,7 +533,7 @@ def main():
         default="evertz",
         help="Password for frame web access",
     )
-    args_parser.add_argument(
+    parser.add_argument(
         "-nms",
         "--magnum-nms",
         required=False,
@@ -486,41 +541,105 @@ def main():
         metavar="<ip>",
         help="IP Address of the NMS Server for custom names (optional)",
     )
-    args_parser.add_argument(
+    parser.add_argument(
         "-legacy",
         "--legacy-frame",
         required=False,
         action="store_true",
         help="Use the legacy frame URL structure (optional)",
     )
+    parser.add_argument(
+        "-dump",
+        "--dump-data",
+        required=False,
+        action="store_true",
+        help="Dump collected data to a file (optional)",
+    )
+
+
+def frame_to_documents(host: str, frame: Frame) -> List[Dict[str, Any]]:
+    """Convert collected frame data into output documents."""
+    documents: List[Dict[str, Any]] = []
+
+    for card in frame.values():
+        if card is None or not isinstance(card, dict):
+            continue
+
+        for instance in card.values():
+            documents.append({"fields": instance, "host": host, "name": "rf_demod"})
+
+    return documents
+
+
+def main():
+    """Main function."""
+
+    args_parser = argparse.ArgumentParser(
+        description="7880DM4-ATSC Input RF Power Level Collector"
+    )
+
+    subparsers = args_parser.add_subparsers(dest="mode", required=True)
+
+    single_parser = subparsers.add_parser(
+        "single", help="Collect from a single 7800 frame"
+    )
+    single_parser.add_argument(
+        "-ip",
+        "--frame-ip",
+        required=True,
+        type=str,
+        metavar="<192.168.1.2>",
+        help="IP Address of the 7800 Frame",
+    )
+    add_common_args(single_parser)
+
+    multiple_parser = subparsers.add_parser(
+        "multiple", help="Collect from multiple 7800 frames"
+    )
+    multiple_parser.add_argument(
+        "-ips",
+        "--frame-ips",
+        required=True,
+        nargs="+",
+        type=str,
+        metavar="<192.168.1.2>",
+        help="IP Addresses of 7800 Frames",
+    )
+    add_common_args(multiple_parser)
 
     args = args_parser.parse_args()
 
-    params: DMCollectorParams = {
-        "ip": args.frame_ip,
+    collector_params: DMCollectorParams = {
+        "ip": "localhost",
         "slots": [],
         "username": args.username,
         "password": args.password,
         "legacy": args.legacy_frame,
+        "dump_data": args.dump_data,
     }
 
     if args.magnum_nms is not None:
-        params["nms"] = {"server": args.magnum_nms}
+        collector_params["nms"] = {"server": args.magnum_nms, "version": "vistalink"}
 
-    # Auto discover cards in frame
-    collector = DMCollector.auto_discover("7880DM4-ATSC", **params)
+    documents: List[Dict[str, Any]] = []
 
-    # Run the collector
-    frame = collector.run()
+    match args.mode:
+        # For single frame collection, directly use DMCollector class
+        case "single":
+            collector_params["ip"] = args.frame_ip
 
-    documents = []
-    for _, card in frame.items():
-        if card is None or not isinstance(card, dict):
-            continue
+            collector = DMCollector.auto_discover("7880DM4-ATSC", **collector_params)
+            frame = collector.run()
 
-        for _, instance in card.items():
-            document = {"fields": instance, "host": params["ip"], "name": "rf_demod"}
-            documents.append(document)
+            documents.extend(frame_to_documents(args.frame_ip, frame))
+
+        # For multiple frame collection, use DMCollectorMultiFrame class
+        case "multiple":
+            collector = DMCollectorMultiFrame(args.frame_ips, **collector_params)
+            results = collector.run()
+
+            for host, frame in results.items():
+                documents.extend(frame_to_documents(host, frame))
 
     print(json.dumps(documents, indent=4))
 

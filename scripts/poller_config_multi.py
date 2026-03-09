@@ -1,6 +1,10 @@
 import json
 
-from dm_atsc_collector import DMCollector, DMCollectorParams, frame_to_documents
+from dm_atsc_collector import (
+    DMCollectorMultiFrame,
+    DMCollectorParams,
+    frame_to_documents,
+)
 from insite_plugin import InsitePlugin
 
 
@@ -9,9 +13,6 @@ class Plugin(InsitePlugin):
         return False
 
     def fetch(self, hosts):
-
-        host = hosts[-1]
-
         try:
 
             self.collector
@@ -19,16 +20,19 @@ class Plugin(InsitePlugin):
         except Exception:
 
             params: DMCollectorParams = {
-                "ip": host,
+                "ip": "localhost",
                 "slots": [],
                 "nms": {"server": "nms-server-ip", "version": "vistalink"},
                 "legacy": False,
             }
 
-            self.collector = DMCollector.auto_discover("7880DM4-ATSC", **params)
+            self.collector = DMCollectorMultiFrame(hosts, **params)
 
         frame = self.collector.run()
 
-        documents = frame_to_documents(host, frame)
+        documents = []
+
+        for host, frame in frame.items():
+            documents.extend(frame_to_documents(host, frame))
 
         return json.dumps(documents)
