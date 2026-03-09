@@ -10,7 +10,7 @@ from insite_plugin import InsitePlugin
 
 class Plugin(InsitePlugin):
     def can_group(self):
-        return False
+        return True
 
     def fetch(self, hosts):
         try:
