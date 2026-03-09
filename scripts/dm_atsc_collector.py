@@ -313,6 +313,17 @@ class DMCollector:
 
         return instance
 
+    def _dump_response(self, url: str, response_data: Dict[str, Any]) -> None:
+        """Dump response data to a file for debugging purposes."""
+        if not os.path.exists("dump"):
+            os.makedirs("dump")
+
+        filename = f"dump/{url.replace('/', '_').replace('http:__', '')}"
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(response_data, f, indent=4)
+
+        print(f"Dumped data to {filename}")
+
     def fetch(self, url: str, parameters: List[JSONRPCParameter]) -> JSONRPCResponse:
         """Fetch data from DM device."""
         try:
@@ -339,12 +350,7 @@ class DMCollector:
                 )
 
                 if self.dump_data:
-                    if not os.path.exists("dump"):
-                        os.makedirs("dump")
-                    filename = f"dump/{url.replace('/', '_').replace('http:__', '')}"
-                    with open(filename, "w", encoding="utf-8") as f:
-                        json.dump(response.json(), f, indent=4)
-                    print(f"Dumped data to {filename}")
+                    self._dump_response(url, response.json())
 
                 return json.loads(response.text)
 
