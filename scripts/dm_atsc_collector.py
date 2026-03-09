@@ -38,6 +38,7 @@ class DMCollectorParams(TypedDict):
     username: NotRequired[str]
     password: NotRequired[str]
     nms: NotRequired[NMSDeviceNamesParams]
+    legacy: NotRequired[bool]
 
 
 class JSONRPCRequest(TypedDict):
@@ -234,6 +235,7 @@ class DMCollector:
         # Frame information
         self.ip = "localhost"
         self.slots: List[int] = []
+        self.legacy = False
 
         # Credentials for web easy
         self.username = "root"
@@ -243,13 +245,17 @@ class DMCollector:
         self.nms: NMSDeviceNamesParams | None = None
         self.nms_names: NMSDeviceNames | None = None
 
-        # Unpack kwargs
+        # Unpack kwargs to instance variables with defaults
         for key, value in kwargs.items():
             setattr(self, key, value)
 
         # API URLs for frame controller and cards
         self.card_url = f"http://{self.ip}/slot/<replace>/htdocs/cgi-bin/cfgjsonrpc"
         self.frame_url = f"http://{self.ip}/v.1.5/php/datas/cfgjsonrpc.php"
+
+        # If legacy flag is set, use the older frame URL structure
+        if self.legacy:
+            self.frame_url = f"http://{self.ip}/cgi-bin/cfgjsonrpc"
 
         self.card_parameters: List[JSONRPCParameter] = []
         self.frame_parameters: List[JSONRPCParameter] = []
@@ -480,6 +486,13 @@ def main():
         metavar="<ip>",
         help="IP Address of the NMS Server for custom names (optional)",
     )
+    args_parser.add_argument(
+        "-legacy",
+        "--legacy-frame",
+        required=False,
+        action="store_true",
+        help="Use the legacy frame URL structure (optional)",
+    )
 
     args = args_parser.parse_args()
 
@@ -488,6 +501,7 @@ def main():
         "slots": [],
         "username": args.username,
         "password": args.password,
+        "legacy": args.legacy_frame,
     }
 
     if args.magnum_nms is not None:

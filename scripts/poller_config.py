@@ -22,6 +22,7 @@ class Plugin(InsitePlugin):
                 "ip": host,
                 "slots": [],
                 "nms": {"server": "nms-server-ip", "version": "vistalink"},
+                "legacy": False,
             }
 
             self.collector = DMCollector.auto_discover("7880DM4-ATSC", **params)
