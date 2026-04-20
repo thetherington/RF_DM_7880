@@ -14,6 +14,7 @@ from typing import (
     NotRequired,
     Optional,
     Self,
+    Set,
     TypedDict,
     Union,
     Unpack,
@@ -23,6 +24,8 @@ import requests
 from requests.exceptions import RequestException
 
 TIMEOUT = 5.0
+
+INPUT_TAG_FILTERS = ["SPARE"]
 
 
 class NMSDeviceNamesParams(TypedDict):
@@ -388,6 +391,8 @@ class DMCollector:
         """Collect data from a specific card slot."""
         url = self.get_url(self.card_url, str(slot))
 
+        instances_filtered: Set[str] = set()
+
         card: Card = {
             "1": {"as_ids": [], "i_input": 1, "i_slot": slot},
             "2": {"as_ids": [], "i_input": 2, "i_slot": slot},
@@ -410,6 +415,12 @@ class DMCollector:
                 instance = _id.split("@")[0]
                 instance = str(int(instance) + 1)
 
+                # filter out parameters with tags that match our tag filters, e.g. SPARE ports
+                if param["name"] == "s_input_tag" and len(INPUT_TAG_FILTERS) > 0:
+                    tag_value = str(param.get("value", "")).strip()
+                    if any(tag in tag_value for tag in INPUT_TAG_FILTERS):
+                        instances_filtered.add(instance)
+
                 # resolve the lock status enumeration
                 if "input_status" in param["name"]:
                     if param.get("value") == 1:
@@ -430,6 +441,11 @@ class DMCollector:
             except (KeyError, ValueError, IndexError) as error:
                 print(f"Error processing parameter {param}: {error}")
                 continue
+
+        # if the instance was filtered, remove it from the card output
+        for instance in instances_filtered:
+            if instance in card:
+                del card[instance]
 
         return card
 
