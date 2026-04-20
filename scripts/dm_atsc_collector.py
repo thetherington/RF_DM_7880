@@ -25,7 +25,8 @@ from requests.exceptions import RequestException
 
 TIMEOUT = 5.0
 
-INPUT_TAG_FILTERS = ["SPARE"]
+# List of substrings to filter out of input tags, e.g. SPARE ports that are not in use
+INPUT_TAG_FILTERS = []
 
 
 class NMSDeviceNamesParams(TypedDict):
