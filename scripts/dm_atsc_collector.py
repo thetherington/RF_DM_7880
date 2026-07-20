@@ -6,19 +6,8 @@ import json
 import os
 import re
 import threading
-from typing import (
-    Any,
-    Dict,
-    List,
-    Literal,
-    NotRequired,
-    Optional,
-    Self,
-    Set,
-    TypedDict,
-    Union,
-    Unpack,
-)
+from typing import (Any, Dict, List, Literal, NotRequired, Optional, Self, Set,
+                    TypedDict, Union, Unpack)
 
 import requests
 from requests.exceptions import RequestException
@@ -83,9 +72,13 @@ class Demod(TypedDict, total=False):
     i_input_mer: int
     i_input: int
     i_slot: int
+    i_rf_channel: int
+    d_pre_fec_ber: float
     s_card_type: str
     s_card_label: str
     s_frame_label: str
+    s_demod_side: str
+    s_lrf_id: str
     as_ids: List[int]
 
 
@@ -116,6 +109,12 @@ Frame = TypedDict(
     },
 )
 
+class CardLabelData(TypedDict):
+    """Type Definition for Card Label Data"""
+
+    card_label: Optional[str]
+    demod_side: Optional[str]
+    lrf_id: Optional[str]
 
 class NMSAPIResponse(TypedDict):
     """Type Definition NMS API Response"""
@@ -143,17 +142,32 @@ class NMSDeviceNames:
         self.ip = frame
         self.api_url = f"http://{server}:8082/{version}/1/hardware/<replace>/label.json"
 
-        self.slots: List[str | None] = [None for _ in range(16)]
+        self.slots: List[CardLabelData | None] = [None for _ in range(16)]
         self.frame = None
 
         try:
             # Fetch slot labels
             for slot in range(2, 16):
                 response = self.fetch(self.get_url(self.api_url, f"{self.ip}:{slot}"))
+
                 if response is not None:
                     # remove the [#] prefix from the label
                     result = re.sub(r"\[\d+\]\s*", "", response["result"]).strip()
-                    self.slots[slot] = result
+
+                    # Initialize label data with default None values
+                    c: CardLabelData = {
+                        "card_label": result,
+                        "demod_side": None,
+                        "lrf_id": None,
+                    }
+
+                    # Extract LRF ID and Demod Card side from label
+                    try:
+                        c["lrf_id"], c["demod_side"] = self.extract_label_data(result)
+                    except ValueError:
+                        pass
+
+                    self.slots[slot] = c
 
             # Fetch frame label
             frame_response = self.fetch(self.get_url(self.api_url, self.ip))
@@ -195,11 +209,28 @@ class NMSDeviceNames:
             print(f"Unexpected error in fetch: {error}")
             raise
 
+    @staticmethod
+    def extract_label_data(label: str) -> tuple[str, str]:
+        """Extract LRF ID and Demod Card side from label."""
+
+        # Capture only what is before the first hyphen and after the last hyphen.
+        # The middle part is ignored.
+        pattern = re.compile(
+            r"^\s*(?P<lrf_id>.+?)\s*-\s*.*\s*-\s*(?P<demod_side>.+?)\s*$"
+        )
+
+        match = pattern.match(label)
+        if not match:
+            raise ValueError(f"Label does not match expected format: {label!r}")
+
+        return match.group("lrf_id"), match.group("demod_side")
+
+
     def get_url(self, url: str, replace: str) -> str:
         """Get URL with replacement."""
         return url.replace("<replace>", replace)
 
-    def get_slot(self, slot: int) -> Optional[str]:
+    def get_card_label_data(self, slot: int) -> Optional[CardLabelData]:
         """Get slot label from NMS server."""
         return self.slots[slot]
 
@@ -212,30 +243,39 @@ class DMCollector:
     """7880DM4-ATSC Demodulator Input Collector for 7800 Frames"""
 
     SLOT: JSONRPCParameter = {
-        "id": "36.<replace>@s",
+        "id": "36.instance@s",
         "type": "string",
         "name": "Product Name",
     }
-
     TAG: JSONRPCParameter = {
-        "id": "150.<replace>@s",
+        "id": "150.instance@s",
         "type": "string",
         "name": "s_input_tag",
     }
     LOCK: JSONRPCParameter = {
-        "id": "120.<replace>@i",
+        "id": "120.instance@i",
         "type": "integer",
         "name": "s_input_status",
     }
     POWER: JSONRPCParameter = {
-        "id": "121.<replace>@i",
+        "id": "121.instance@i",
         "type": "integer",
         "name": "i_input_power",
     }
     MER: JSONRPCParameter = {
-        "id": "126.<replace>@i",
+        "id": "126.instance@i",
         "type": "integer",
         "name": "i_input_mer",
+    }
+    BER: JSONRPCParameter = {
+        "id": "127.instance@i",
+        "type": "integer",
+        "name": "d_pre_fec_ber",
+    }
+    CHANNEL: JSONRPCParameter = {
+        "id": "102.instance@i",
+        "type": "integer",
+        "name": "i_rf_channel",
     }
 
     def __init__(self, **kwargs: Unpack[DMCollectorParams]) -> None:
@@ -272,15 +312,15 @@ class DMCollector:
 
         # generate card query parameters for 4 ports
         for port in range(4):
-            for param in [self.TAG, self.LOCK, self.POWER, self.MER]:
+            for param in [self.TAG, self.LOCK, self.POWER, self.MER, self.BER, self.CHANNEL]:
                 c = copy.deepcopy(param)
-                c["id"] = c["id"].replace("<replace>", str(port))
+                c["id"] = c["id"].replace("instance", str(port))
                 self.card_parameters.append(c)
 
         # generate query parameters to discover cards in each slot
         for slot in range(2, 16):
             s = copy.deepcopy(self.SLOT)
-            s["id"] = s["id"].replace("<replace>", str(slot))
+            s["id"] = s["id"].replace("instance", str(slot))
             self.frame_parameters.append(s)
 
         # Initialize parent NMS Name Collector
@@ -377,16 +417,23 @@ class DMCollector:
         if self.nms_names is None:
             return
 
-        for port in range(1, 5):
-            slot = card[str(port)]["i_slot"]
+        for port in ["1", "2", "3", "4"]:
+            slot = card[port]["i_slot"]
 
-            if (slot_name := self.nms_names.get_slot(slot)) is not None:
-                card[str(port)]["s_card_label"] = slot_name
+            # Annotate with NMS names if available
+            if (card_data := self.nms_names.get_card_label_data(slot)) is not None:
+                card[port]["s_card_label"] = card_data["card_label"]
+
+                if (demod_side := card_data["demod_side"]) is not None:
+                    card[port]["s_demod_side"] = demod_side
+
+                if (lrf_id := card_data["lrf_id"]) is not None:
+                    card[port]["s_lrf_id"] = lrf_id
 
             if (frame_name := self.nms_names.get_frame()) is not None:
-                card[str(port)]["s_frame_label"] = frame_name
+                card[port]["s_frame_label"] = frame_name
 
-            card[str(port)]["s_card_type"] = "7880DM4-ATSC"
+            card[port]["s_card_type"] = "7880DM4-ATSC"
 
     def collect_card(self, slot: int) -> Card:
         """Collect data from a specific card slot."""
@@ -428,6 +475,12 @@ class DMCollector:
                         param["value"] = "Locked"
                     else:
                         param["value"] = "Not Locked"
+
+                # calculate the BER value as a float with 6 decimal places
+                if "input_ber" in param["name"]:
+                    ber_value = param.get("value", 0)
+                    if isinstance(ber_value, int):
+                        param["value"] = round(ber_value / 1_000_000, 6)
 
                 # perform a dict update key/value
                 card[instance].update(
