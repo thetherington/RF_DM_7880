@@ -477,7 +477,7 @@ class DMCollector:
                         param["value"] = "Not Locked"
 
                 # calculate the BER value as a float with 6 decimal places
-                if "input_ber" in param["name"]:
+                if "pre_fec_ber" in param["name"]:
                     ber_value = param.get("value", 0)
                     if isinstance(ber_value, int):
                         param["value"] = round(ber_value / 1_000_000, 6)
